@@ -89,6 +89,19 @@ async function sbInsertLinks(rows) {
   }
 }
 
+async function sbBuscar(query) {
+  const q = encodeURIComponent(query.trim());
+  const res = await fetch(
+    `${SUPABASE_URL}/rest/v1/notas?select=id,titulo,conteudo,origem,tags,criado_em&busca=wfts(portuguese).${q}&order=criado_em.desc&limit=25`,
+    { headers: sbHeaders }
+  );
+  if (!res.ok) {
+    const t = await res.text().catch(() => '');
+    throw new Error(`Supabase ${res.status}: ${t}`);
+  }
+  return res.json();
+}
+
 function rowToNote(row) {
   return {
     id: row.id,
@@ -361,6 +374,10 @@ export default function SegundoCerebro() {
   const [selectedId, setSelectedId] = useState(null);
   const [view, setView] = useState('editor');
   const [search, setSearch] = useState('');
+  const [askQuery, setAskQuery] = useState('');
+  const [askResults, setAskResults] = useState([]);
+  const [askLoading, setAskLoading] = useState(false);
+  const [askError, setAskError] = useState(null);
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [isMobile, setIsMobile] = useState(false);
   const [showPreview, setShowPreview] = useState(false);
@@ -421,6 +438,22 @@ export default function SegundoCerebro() {
       await sbInsertLinks(rows);
     } catch (e) {
       console.error('Erro ao sincronizar links no Supabase', e);
+    }
+  }, []);
+
+  const runAsk = useCallback(async (query) => {
+    if (!query.trim()) return;
+    setAskLoading(true);
+    setAskError(null);
+    try {
+      const rows = await sbBuscar(query);
+      setAskResults((rows || []).map(rowToNote));
+    } catch (e) {
+      console.error('Erro na busca', e);
+      setAskError(e.message);
+      setAskResults([]);
+    } finally {
+      setAskLoading(false);
     }
   }, []);
 
@@ -619,6 +652,9 @@ export default function SegundoCerebro() {
             <button style={{ ...styles.toggleBtn, ...(view === 'graph' ? styles.toggleBtnActive : {}) }} onClick={() => setView('graph')}>
               <Network size={13} /> Grafo
             </button>
+            <button style={{ ...styles.toggleBtn, ...(view === 'ask' ? styles.toggleBtnActive : {}) }} onClick={() => setView('ask')}>
+              <Search size={13} /> Perguntar
+            </button>
           </div>
           {!isMobile && (
             <div style={styles.stats}>
@@ -690,6 +726,53 @@ export default function SegundoCerebro() {
         {view === 'graph' && (
           <div style={styles.graphWrap}>
             <GraphView notes={notes} selectedId={selectedId} onSelect={(id) => setSelectedId(id)} />
+          </div>
+        )}
+
+        {view === 'ask' && (
+          <div style={styles.askWrap}>
+            <div style={styles.askBox}>
+              <Search size={15} color="#7a8299" />
+              <input
+                autoFocus
+                value={askQuery}
+                onChange={(e) => setAskQuery(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') runAsk(askQuery);
+                }}
+                placeholder="Pergunte algo... ex: o que sei sobre a agência de marketing?"
+                style={styles.askInput}
+              />
+              <button style={styles.askBtn} onClick={() => runAsk(askQuery)} disabled={askLoading}>
+                {askLoading ? '...' : 'Buscar'}
+              </button>
+            </div>
+
+            {askError && <div style={styles.askError}>⚠ {askError}</div>}
+
+            {!askError && askResults.length === 0 && !askLoading && askQuery && (
+              <div style={styles.emptyState}>Nenhuma nota relevante encontrada.</div>
+            )}
+
+            <div style={styles.askResults}>
+              {askResults.map((n) => (
+                <div
+                  key={n.id}
+                  style={styles.askResultCard}
+                  onClick={() => {
+                    setSelectedId(n.id);
+                    setView('editor');
+                  }}
+                >
+                  <div style={styles.askResultTitle}>{n.title}</div>
+                  <div style={styles.askResultSnippet}>
+                    {n.content.replace(/\[\[|\]\]/g, '').slice(0, 220)}
+                    {n.content.length > 220 ? '…' : ''}
+                  </div>
+                  {n.origem && <div style={styles.askResultOrigem}>origem: {n.origem}</div>}
+                </div>
+              ))}
+            </div>
           </div>
         )}
       </div>
@@ -776,6 +859,40 @@ const styles = {
   backlinksList: { display: 'flex', flexWrap: 'wrap', gap: 6 },
   backlinkPill: { fontSize: 11.5, padding: '4px 10px', background: '#1f2430', color: '#e8a05c', borderRadius: 20, cursor: 'pointer' },
   graphWrap: { flex: 1, background: '#0e1116' },
+  askWrap: { flex: 1, display: 'flex', flexDirection: 'column', padding: '20px 24px', overflowY: 'auto' },
+  askBox: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: 10,
+    padding: '10px 14px',
+    background: '#12151c',
+    border: '1px solid #232833',
+    borderRadius: 10,
+    marginBottom: 18,
+  },
+  askInput: { flex: 1, background: 'transparent', border: 'none', outline: 'none', color: '#e8e2d6', fontSize: 14 },
+  askBtn: {
+    padding: '7px 14px',
+    background: '#e8a05c',
+    color: '#1a1410',
+    border: 'none',
+    borderRadius: 7,
+    fontSize: 12.5,
+    fontWeight: 600,
+    cursor: 'pointer',
+  },
+  askError: { color: '#e07a5f', fontSize: 12.5, marginBottom: 10 },
+  askResults: { display: 'flex', flexDirection: 'column', gap: 10 },
+  askResultCard: {
+    background: '#12151c',
+    border: '1px solid #1e232d',
+    borderRadius: 10,
+    padding: '12px 16px',
+    cursor: 'pointer',
+  },
+  askResultTitle: { fontSize: 14, fontWeight: 700, color: '#f0ece2', marginBottom: 6 },
+  askResultSnippet: { fontSize: 12.5, color: '#a8a29a', lineHeight: 1.5 },
+  askResultOrigem: { fontSize: 10.5, color: '#5c6373', marginTop: 6, textTransform: 'uppercase', letterSpacing: 0.4 },
   emptyMain: { flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 14 },
   emptyMainText: { fontSize: 13.5, color: '#5c6373' },
 };
