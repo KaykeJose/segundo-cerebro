@@ -102,6 +102,19 @@ async function sbBuscar(query) {
   return res.json();
 }
 
+async function sbPerguntar(pergunta) {
+  const res = await fetch(`${SUPABASE_URL}/functions/v1/perguntar`, {
+    method: 'POST',
+    headers: { ...sbHeaders },
+    body: JSON.stringify({ pergunta }),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    throw new Error(data.error || `Erro ${res.status} ao perguntar`);
+  }
+  return data;
+}
+
 function rowToNote(row) {
   return {
     id: row.id,
@@ -376,6 +389,7 @@ export default function SegundoCerebro() {
   const [search, setSearch] = useState('');
   const [askQuery, setAskQuery] = useState('');
   const [askResults, setAskResults] = useState([]);
+  const [askAnswer, setAskAnswer] = useState('');
   const [askLoading, setAskLoading] = useState(false);
   const [askError, setAskError] = useState(null);
   const [sidebarOpen, setSidebarOpen] = useState(true);
@@ -445,17 +459,21 @@ export default function SegundoCerebro() {
     if (!query.trim()) return;
     setAskLoading(true);
     setAskError(null);
+    setAskAnswer('');
     try {
-      const rows = await sbBuscar(query);
-      setAskResults((rows || []).map(rowToNote));
+      const data = await sbPerguntar(query);
+      setAskAnswer(data.resposta || '');
+      const usedTitles = (data.notas_usadas || []).map((t) => t.toLowerCase());
+      const matched = notes.filter((n) => usedTitles.includes(n.title.toLowerCase()));
+      setAskResults(matched);
     } catch (e) {
-      console.error('Erro na busca', e);
+      console.error('Erro ao perguntar', e);
       setAskError(e.message);
       setAskResults([]);
     } finally {
       setAskLoading(false);
     }
-  }, []);
+  }, [notes]);
 
   const selected = notes.find((n) => n.id === selectedId);
 
@@ -740,7 +758,7 @@ export default function SegundoCerebro() {
                 onKeyDown={(e) => {
                   if (e.key === 'Enter') runAsk(askQuery);
                 }}
-                placeholder="Pergunte algo... ex: o que sei sobre a agência de marketing?"
+                placeholder="Pergunte de verdade... ex: o que sei sobre a agência de marketing?"
                 style={styles.askInput}
               />
               <button style={styles.askBtn} onClick={() => runAsk(askQuery)} disabled={askLoading}>
@@ -750,10 +768,20 @@ export default function SegundoCerebro() {
 
             {askError && <div style={styles.askError}>⚠ {askError}</div>}
 
-            {!askError && askResults.length === 0 && !askLoading && askQuery && (
+            {askAnswer && (
+              <div style={styles.askAnswerBox}>
+                <div style={styles.askAnswerLabel}>🧠 resposta</div>
+                <div style={styles.askAnswerText}>{askAnswer}</div>
+              </div>
+            )}
+
+            {!askError && !askAnswer && askResults.length === 0 && !askLoading && askQuery && (
               <div style={styles.emptyState}>Nenhuma nota relevante encontrada.</div>
             )}
 
+            {askResults.length > 0 && (
+              <div style={styles.askSourcesLabel}>fontes usadas</div>
+            )}
             <div style={styles.askResults}>
               {askResults.map((n) => (
                 <div
@@ -882,6 +910,16 @@ const styles = {
     cursor: 'pointer',
   },
   askError: { color: '#e07a5f', fontSize: 12.5, marginBottom: 10 },
+  askAnswerBox: {
+    background: '#161b12',
+    border: '1px solid #2e3a22',
+    borderRadius: 10,
+    padding: '16px 18px',
+    marginBottom: 18,
+  },
+  askAnswerLabel: { fontSize: 11, color: '#7dbfa0', marginBottom: 8, textTransform: 'uppercase', letterSpacing: 0.5 },
+  askAnswerText: { fontSize: 14, color: '#e8e2d6', lineHeight: 1.65, whiteSpace: 'pre-wrap' },
+  askSourcesLabel: { fontSize: 11, color: '#6b7180', marginBottom: 8, textTransform: 'uppercase', letterSpacing: 0.5 },
   askResults: { display: 'flex', flexDirection: 'column', gap: 10 },
   askResultCard: {
     background: '#12151c',
