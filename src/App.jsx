@@ -65,6 +65,30 @@ async function sbDeleteNota(id) {
   }
 }
 
+async function sbDeleteLinksFromOrigem(id) {
+  const res = await fetch(`${SUPABASE_URL}/rest/v1/notas_links?nota_origem_id=eq.${encodeURIComponent(id)}`, {
+    method: 'DELETE',
+    headers: { ...sbHeaders, Prefer: 'return=minimal' },
+  });
+  if (!res.ok) {
+    const t = await res.text().catch(() => '');
+    throw new Error(`Supabase ${res.status}: ${t}`);
+  }
+}
+
+async function sbInsertLinks(rows) {
+  if (!rows.length) return;
+  const res = await fetch(`${SUPABASE_URL}/rest/v1/notas_links`, {
+    method: 'POST',
+    headers: { ...sbHeaders, Prefer: 'return=minimal' },
+    body: JSON.stringify(rows),
+  });
+  if (!res.ok) {
+    const t = await res.text().catch(() => '');
+    throw new Error(`Supabase ${res.status}: ${t}`);
+  }
+}
+
 function rowToNote(row) {
   return {
     id: row.id,
@@ -383,13 +407,33 @@ export default function SegundoCerebro() {
     }
   }, []);
 
+  const syncLinks = useCallback(async (note, allNotes) => {
+    try {
+      await sbDeleteLinksFromOrigem(note.id);
+      const linkTitles = extractLinks(note.content);
+      const rows = [];
+      linkTitles.forEach((lt) => {
+        const target = allNotes.find(
+          (n) => n.id !== note.id && n.title.toLowerCase() === lt.toLowerCase()
+        );
+        if (target) rows.push({ nota_origem_id: note.id, nota_destino_id: target.id });
+      });
+      await sbInsertLinks(rows);
+    } catch (e) {
+      console.error('Erro ao sincronizar links no Supabase', e);
+    }
+  }, []);
+
   const selected = notes.find((n) => n.id === selectedId);
 
   const updateNoteContent = (content) => {
     setNotes((prev) => {
       const next = prev.map((n) => (n.id === selectedId ? { ...n, content, updatedAt: Date.now() } : n));
       const updated = next.find((n) => n.id === selectedId);
-      if (updated) persistNote(updated);
+      if (updated) {
+        persistNote(updated);
+        syncLinks(updated, next);
+      }
       return next;
     });
   };
@@ -413,6 +457,7 @@ export default function SegundoCerebro() {
       try {
         await sbInsertNota(newNote);
         setSyncError(null);
+        syncLinks(newNote, [newNote, ...notes]);
       } catch (e) {
         console.error('Erro ao criar nota no Supabase', e);
         setSyncError(e.message);
@@ -424,6 +469,11 @@ export default function SegundoCerebro() {
   const deleteNote = async (id) => {
     setNotes((prev) => prev.filter((n) => n.id !== id));
     try {
+      await sbDeleteLinksFromOrigem(id);
+      await fetch(`${SUPABASE_URL}/rest/v1/notas_links?nota_destino_id=eq.${encodeURIComponent(id)}`, {
+        method: 'DELETE',
+        headers: { ...sbHeaders, Prefer: 'return=minimal' },
+      });
       await sbDeleteNota(id);
       setSyncError(null);
     } catch (e) {
