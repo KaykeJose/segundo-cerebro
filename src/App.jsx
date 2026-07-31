@@ -102,11 +102,11 @@ async function sbBuscar(query) {
   return res.json();
 }
 
-async function sbPerguntar(pergunta) {
+async function sbPerguntar(pergunta, modelo) {
   const res = await fetch(`${SUPABASE_URL}/functions/v1/perguntar`, {
     method: 'POST',
     headers: { ...sbHeaders },
-    body: JSON.stringify({ pergunta }),
+    body: JSON.stringify({ pergunta, modelo }),
   });
   const data = await res.json().catch(() => ({}));
   if (!res.ok) {
@@ -392,6 +392,7 @@ export default function SegundoCerebro() {
   const [askAnswer, setAskAnswer] = useState('');
   const [askLoading, setAskLoading] = useState(false);
   const [askError, setAskError] = useState(null);
+  const [askModel, setAskModel] = useState('anthropic');
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [isMobile, setIsMobile] = useState(false);
   const [showPreview, setShowPreview] = useState(false);
@@ -461,7 +462,7 @@ export default function SegundoCerebro() {
     setAskError(null);
     setAskAnswer('');
     try {
-      const data = await sbPerguntar(query);
+      const data = await sbPerguntar(query, askModel);
       setAskAnswer(data.resposta || '');
       const usedTitles = (data.notas_usadas || []).map((t) => t.toLowerCase());
       const matched = notes.filter((n) => usedTitles.includes(n.title.toLowerCase()));
@@ -473,7 +474,7 @@ export default function SegundoCerebro() {
     } finally {
       setAskLoading(false);
     }
-  }, [notes]);
+  }, [notes, askModel]);
 
   const selected = notes.find((n) => n.id === selectedId);
 
@@ -749,6 +750,24 @@ export default function SegundoCerebro() {
 
         {view === 'ask' && (
           <div style={styles.askWrap}>
+            <div style={styles.modelSelector}>
+              {[
+                { id: 'anthropic', label: 'Claude' },
+                { id: 'openai', label: 'ChatGPT' },
+                { id: 'gemini', label: 'Gemini' },
+              ].map((m) => (
+                <button
+                  key={m.id}
+                  onClick={() => setAskModel(m.id)}
+                  style={{
+                    ...styles.modelBtn,
+                    ...(askModel === m.id ? styles.modelBtnActive : {}),
+                  }}
+                >
+                  {m.label}
+                </button>
+              ))}
+            </div>
             <div style={styles.askBox}>
               <Search size={15} color="#7a8299" />
               <input
@@ -770,7 +789,10 @@ export default function SegundoCerebro() {
 
             {askAnswer && (
               <div style={styles.askAnswerBox}>
-                <div style={styles.askAnswerLabel}>🧠 resposta</div>
+                <div style={styles.askAnswerLabel}>
+                  🧠 resposta ·{' '}
+                  {{ anthropic: 'Claude', openai: 'ChatGPT', gemini: 'Gemini' }[askModel] || askModel}
+                </div>
                 <div style={styles.askAnswerText}>{askAnswer}</div>
               </div>
             )}
@@ -888,6 +910,9 @@ const styles = {
   backlinkPill: { fontSize: 11.5, padding: '4px 10px', background: '#1f2430', color: '#e8a05c', borderRadius: 20, cursor: 'pointer' },
   graphWrap: { flex: 1, background: '#0e1116' },
   askWrap: { flex: 1, display: 'flex', flexDirection: 'column', padding: '20px 24px', overflowY: 'auto' },
+  modelSelector: { display: 'flex', gap: 6, marginBottom: 12, background: '#161a22', padding: 3, borderRadius: 8, width: 'fit-content' },
+  modelBtn: { padding: '6px 14px', background: 'transparent', border: 'none', borderRadius: 6, fontSize: 12, fontWeight: 600, color: '#8b91a0', cursor: 'pointer' },
+  modelBtnActive: { background: '#2a3040', color: '#e8a05c' },
   askBox: {
     display: 'flex',
     alignItems: 'center',
