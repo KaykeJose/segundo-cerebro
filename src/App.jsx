@@ -4,7 +4,7 @@ import { Search, Plus, Network, FileText, Trash2, Tag, X, Menu } from 'lucide-re
 
 // ---------- Supabase via API REST direta (mesmo padrão já usado no Make) ----------
 const SUPABASE_URL = 'https://trddqvqbtvvwjqlgswwo.supabase.co';
-const SUPABASE_ANON_KEY = 'sb_publishable_EHe9qhOcTVytZSNDzKB_nw_5qlCNq4v';
+const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InRyZGRxdnFidHZ2d2pxbGdzd3dvIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODM0NTEyMTEsImV4cCI6MjA5OTAyNzIxMX0.ojTwyRP0LpPDqloLghfCrmOsJD5lhoMZxGU0W4LyCa4';
 
 const sbHeaders = {
   apikey: SUPABASE_ANON_KEY,
