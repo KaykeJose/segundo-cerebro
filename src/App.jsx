@@ -6,16 +6,69 @@ import { Search, Plus, Network, FileText, Trash2, Tag, X, Menu } from 'lucide-re
 const SUPABASE_URL = 'https://trddqvqbtvvwjqlgswwo.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_EHe9qhOcTVytZSNDzKB_nw_5qlCNq4v';
 
-const sbHeaders = {
-  apikey: SUPABASE_ANON_KEY,
-  Authorization: `Bearer ${SUPABASE_ANON_KEY}`,
-  'Content-Type': 'application/json',
-};
+// ---------- Autenticação (Supabase Auth, mesmo usuário do app de finanças) ----------
+const AUTH_STORAGE_KEY = 'segundo_cerebro_session';
+
+function getSession() {
+  try {
+    const raw = localStorage.getItem(AUTH_STORAGE_KEY);
+    return raw ? JSON.parse(raw) : null;
+  } catch {
+    return null;
+  }
+}
+
+function setSession(session) {
+  if (session) localStorage.setItem(AUTH_STORAGE_KEY, JSON.stringify(session));
+  else localStorage.removeItem(AUTH_STORAGE_KEY);
+}
+
+async function sbLogin(email, password) {
+  const res = await fetch(`${SUPABASE_URL}/auth/v1/token?grant_type=password`, {
+    method: 'POST',
+    headers: { apikey: SUPABASE_ANON_KEY, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ email, password }),
+  });
+  const data = await res.json();
+  if (!res.ok) throw new Error(data.error_description || data.msg || 'Falha no login');
+  setSession(data);
+  return data;
+}
+
+async function sbRefreshSession() {
+  const session = getSession();
+  if (!session?.refresh_token) return null;
+  const res = await fetch(`${SUPABASE_URL}/auth/v1/token?grant_type=refresh_token`, {
+    method: 'POST',
+    headers: { apikey: SUPABASE_ANON_KEY, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ refresh_token: session.refresh_token }),
+  });
+  if (!res.ok) {
+    setSession(null);
+    return null;
+  }
+  const data = await res.json();
+  setSession(data);
+  return data;
+}
+
+function sbLogout() {
+  setSession(null);
+}
+
+function sbHeaders() {
+  const session = getSession();
+  return {
+    apikey: SUPABASE_ANON_KEY,
+    Authorization: `Bearer ${session?.access_token || SUPABASE_ANON_KEY}`,
+    'Content-Type': 'application/json',
+  };
+}
 
 async function sbSelectNotas() {
   const res = await fetch(
     `${SUPABASE_URL}/rest/v1/notas?select=id,titulo,conteudo,origem,tags,criado_em,atualizado_em&order=criado_em.asc`,
-    { headers: sbHeaders }
+    { headers: sbHeaders() }
   );
   if (!res.ok) {
     const t = await res.text().catch(() => '');
@@ -27,7 +80,7 @@ async function sbSelectNotas() {
 async function sbInsertNota(note) {
   const res = await fetch(`${SUPABASE_URL}/rest/v1/notas`, {
     method: 'POST',
-    headers: { ...sbHeaders, Prefer: 'return=minimal' },
+    headers: { ...sbHeaders(), Prefer: 'return=minimal' },
     body: JSON.stringify([
       { id: note.id, titulo: note.title, conteudo: note.content, origem: 'artifact' },
     ]),
@@ -41,7 +94,7 @@ async function sbInsertNota(note) {
 async function sbUpdateNota(note) {
   const res = await fetch(`${SUPABASE_URL}/rest/v1/notas?id=eq.${encodeURIComponent(note.id)}`, {
     method: 'PATCH',
-    headers: { ...sbHeaders, Prefer: 'return=minimal' },
+    headers: { ...sbHeaders(), Prefer: 'return=minimal' },
     body: JSON.stringify({
       titulo: note.title,
       conteudo: note.content,
@@ -57,7 +110,7 @@ async function sbUpdateNota(note) {
 async function sbDeleteNota(id) {
   const res = await fetch(`${SUPABASE_URL}/rest/v1/notas?id=eq.${encodeURIComponent(id)}`, {
     method: 'DELETE',
-    headers: { ...sbHeaders, Prefer: 'return=minimal' },
+    headers: { ...sbHeaders(), Prefer: 'return=minimal' },
   });
   if (!res.ok) {
     const t = await res.text().catch(() => '');
@@ -68,7 +121,7 @@ async function sbDeleteNota(id) {
 async function sbDeleteLinksFromOrigem(id) {
   const res = await fetch(`${SUPABASE_URL}/rest/v1/notas_links?nota_origem_id=eq.${encodeURIComponent(id)}`, {
     method: 'DELETE',
-    headers: { ...sbHeaders, Prefer: 'return=minimal' },
+    headers: { ...sbHeaders(), Prefer: 'return=minimal' },
   });
   if (!res.ok) {
     const t = await res.text().catch(() => '');
@@ -80,7 +133,7 @@ async function sbInsertLinks(rows) {
   if (!rows.length) return;
   const res = await fetch(`${SUPABASE_URL}/rest/v1/notas_links`, {
     method: 'POST',
-    headers: { ...sbHeaders, Prefer: 'return=minimal' },
+    headers: { ...sbHeaders(), Prefer: 'return=minimal' },
     body: JSON.stringify(rows),
   });
   if (!res.ok) {
@@ -93,7 +146,7 @@ async function sbBuscar(query) {
   const q = encodeURIComponent(query.trim());
   const res = await fetch(
     `${SUPABASE_URL}/rest/v1/notas?select=id,titulo,conteudo,origem,tags,criado_em&busca=wfts(portuguese).${q}&order=criado_em.desc&limit=25`,
-    { headers: sbHeaders }
+    { headers: sbHeaders() }
   );
   if (!res.ok) {
     const t = await res.text().catch(() => '');
@@ -105,7 +158,7 @@ async function sbBuscar(query) {
 async function sbPerguntar(pergunta, modelo) {
   const res = await fetch(`${SUPABASE_URL}/functions/v1/perguntar`, {
     method: 'POST',
-    headers: { ...sbHeaders },
+    headers: { ...sbHeaders() },
     body: JSON.stringify({ pergunta, modelo }),
   });
   const data = await res.json().catch(() => ({}));
@@ -312,6 +365,18 @@ function GraphView({ notes, selectedId, onSelect }) {
 
     const maxChars = width < 420 ? 12 : 22;
     const shorten = (t) => (t.length > maxChars ? t.slice(0, maxChars - 1) + '…' : t);
+    const fontSizePre = width < 420 ? 10.5 : 11.5;
+
+    nodeSel
+      .append('rect')
+      .attr('x', 7)
+      .attr('y', -9)
+      .attr('width', (d) => shorten(d.title).length * (fontSizePre * 0.6) + 6)
+      .attr('height', 16)
+      .attr('rx', 3)
+      .attr('fill', '#0e1116')
+      .attr('opacity', 0.82)
+      .style('pointer-events', 'none');
 
     nodeSel
       .append('text')
@@ -325,15 +390,22 @@ function GraphView({ notes, selectedId, onSelect }) {
       .style('pointer-events', 'none');
 
     const nodeRadius = width < 420 ? 6 : 8;
-    const linkDistance = width < 420 ? 75 : 110;
-    const chargeStrength = width < 420 ? -170 : -260;
+    const linkDistance = width < 420 ? 130 : 190;
+    const chargeStrength = width < 420 ? -320 : -480;
+    const fontSize = width < 420 ? 10.5 : 11.5;
+    // raio de colisão estimado a partir do texto (o rótulo fica à direita do nó,
+    // então o "espaço ocupado" real é maior que o círculo sozinho)
+    const collideRadius = (d) => nodeRadius + 10 + shorten(d.title).length * (fontSize * 0.62);
 
     const sim = d3
       .forceSimulation(nodes)
-      .force('link', d3.forceLink(links).id((d) => d.id).distance(linkDistance).strength(0.6))
-      .force('charge', d3.forceManyBody().strength(chargeStrength))
+      .force('link', d3.forceLink(links).id((d) => d.id).distance(linkDistance).strength(0.5))
+      .force('charge', d3.forceManyBody().strength(chargeStrength).distanceMax(600))
       .force('center', d3.forceCenter(width / 2, height / 2))
-      .force('collide', d3.forceCollide(nodeRadius * 5.5));
+      .force('x', d3.forceX(width / 2).strength(0.03))
+      .force('y', d3.forceY(height / 2).strength(0.03))
+      .force('collide', d3.forceCollide(collideRadius).strength(0.9).iterations(3))
+      .alphaDecay(0.02);
 
     simRef.current = sim;
 
@@ -381,7 +453,7 @@ function GraphView({ notes, selectedId, onSelect }) {
   );
 }
 
-export default function SegundoCerebro() {
+function SegundoCerebroApp({ onLogout }) {
   const [notes, setNotes] = useState([]);
   const [loaded, setLoaded] = useState(false);
   const [selectedId, setSelectedId] = useState(null);
@@ -524,7 +596,7 @@ export default function SegundoCerebro() {
       await sbDeleteLinksFromOrigem(id);
       await fetch(`${SUPABASE_URL}/rest/v1/notas_links?nota_destino_id=eq.${encodeURIComponent(id)}`, {
         method: 'DELETE',
-        headers: { ...sbHeaders, Prefer: 'return=minimal' },
+        headers: { ...sbHeaders(), Prefer: 'return=minimal' },
       });
       await sbDeleteNota(id);
       setSyncError(null);
@@ -684,6 +756,9 @@ export default function SegundoCerebro() {
               )}
             </div>
           )}
+          <button style={styles.logoutBtn} onClick={onLogout} title="Sair">
+            Sair
+          </button>
           {isMobile && view === 'editor' && selected && (
             <button style={styles.previewToggleBtn} onClick={() => setShowPreview((v) => !v)}>
               {showPreview ? 'Editar' : 'Ver'}
@@ -958,4 +1033,145 @@ const styles = {
   askResultOrigem: { fontSize: 10.5, color: '#5c6373', marginTop: 6, textTransform: 'uppercase', letterSpacing: 0.4 },
   emptyMain: { flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 14 },
   emptyMainText: { fontSize: 13.5, color: '#5c6373' },
+
+  loginWrap: {
+    minHeight: '100vh',
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    background: '#0a0c11',
+    fontFamily: "'Inter', -apple-system, sans-serif",
+  },
+  loginCard: {
+    width: 340,
+    maxWidth: '90vw',
+    background: '#12151c',
+    border: '1px solid #1e232d',
+    borderRadius: 14,
+    padding: '32px 28px',
+  },
+  loginTitle: { fontSize: 19, fontWeight: 700, color: '#f0ece2', marginBottom: 4 },
+  loginSubtitle: { fontSize: 13, color: '#6b7180', marginBottom: 24 },
+  loginInput: {
+    width: '100%',
+    background: '#0d1016',
+    border: '1px solid #1e232d',
+    borderRadius: 8,
+    padding: '11px 13px',
+    fontSize: 14,
+    color: '#e8e2d6',
+    marginBottom: 12,
+    outline: 'none',
+    boxSizing: 'border-box',
+  },
+  loginBtn: {
+    width: '100%',
+    background: '#e8a05c',
+    color: '#12151c',
+    border: 'none',
+    borderRadius: 8,
+    padding: '11px 13px',
+    fontSize: 14,
+    fontWeight: 700,
+    cursor: 'pointer',
+    marginTop: 4,
+  },
+  loginError: { fontSize: 12.5, color: '#e07a5f', marginBottom: 12 },
+  logoutBtn: {
+    background: 'transparent',
+    border: '1px solid #262b38',
+    borderRadius: 7,
+    padding: '6px 12px',
+    fontSize: 11.5,
+    color: '#6b7180',
+    cursor: 'pointer',
+    marginLeft: 8,
+  },
 };
+
+function LoginScreen({ onLoggedIn }) {
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+  const [error, setError] = useState(null);
+  const [loading, setLoading] = useState(false);
+
+  const submit = async (e) => {
+    e.preventDefault();
+    setError(null);
+    setLoading(true);
+    try {
+      await sbLogin(email.trim(), password);
+      onLoggedIn();
+    } catch (err) {
+      setError(err.message || 'Não foi possível entrar');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <div style={styles.loginWrap}>
+      <form style={styles.loginCard} onSubmit={submit}>
+        <div style={styles.loginTitle}>🧠 Segundo Cérebro</div>
+        <div style={styles.loginSubtitle}>Entre para acessar suas notas</div>
+        {error && <div style={styles.loginError}>{error}</div>}
+        <input
+          style={styles.loginInput}
+          type="email"
+          placeholder="E-mail"
+          value={email}
+          onChange={(e) => setEmail(e.target.value)}
+          autoFocus
+        />
+        <input
+          style={styles.loginInput}
+          type="password"
+          placeholder="Senha"
+          value={password}
+          onChange={(e) => setPassword(e.target.value)}
+        />
+        <button style={styles.loginBtn} type="submit" disabled={loading}>
+          {loading ? 'Entrando...' : 'Entrar'}
+        </button>
+      </form>
+    </div>
+  );
+}
+
+export default function SegundoCerebro() {
+  const [checking, setChecking] = useState(true);
+  const [authed, setAuthed] = useState(false);
+
+  useEffect(() => {
+    (async () => {
+      const session = getSession();
+      if (!session) {
+        setChecking(false);
+        return;
+      }
+      const expiresAt = session.expires_at ? session.expires_at * 1000 : 0;
+      if (Date.now() >= expiresAt - 30000) {
+        const refreshed = await sbRefreshSession();
+        setAuthed(!!refreshed);
+      } else {
+        setAuthed(true);
+      }
+      setChecking(false);
+    })();
+  }, []);
+
+  const handleLogout = useCallback(() => {
+    sbLogout();
+    setAuthed(false);
+  }, []);
+
+  if (checking) {
+    return <div style={styles.loginWrap}></div>;
+  }
+
+  if (!authed) {
+    return <LoginScreen onLoggedIn={() => setAuthed(true)} />;
+  }
+
+  return <SegundoCerebroApp onLogout={handleLogout} />;
+}
