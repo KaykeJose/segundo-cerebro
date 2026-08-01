@@ -6,16 +6,69 @@ import { Search, Plus, Network, FileText, Trash2, Tag, X, Menu } from 'lucide-re
 const SUPABASE_URL = 'https://trddqvqbtvvwjqlgswwo.supabase.co';
 const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InRyZGRxdnFidHZ2d2pxbGdzd3dvIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODM0NTEyMTEsImV4cCI6MjA5OTAyNzIxMX0.ojTwyRP0LpPDqloLghfCrmOsJD5lhoMZxGU0W4LyCa4';
 
-const sbHeaders = {
-  apikey: SUPABASE_ANON_KEY,
-  Authorization: `Bearer ${SUPABASE_ANON_KEY}`,
-  'Content-Type': 'application/json',
-};
+// ---------- Autenticação (Supabase Auth, mesmo usuário do app de finanças) ----------
+const AUTH_STORAGE_KEY = 'segundo_cerebro_session';
+
+function getSession() {
+  try {
+    const raw = localStorage.getItem(AUTH_STORAGE_KEY);
+    return raw ? JSON.parse(raw) : null;
+  } catch {
+    return null;
+  }
+}
+
+function setSession(session) {
+  if (session) localStorage.setItem(AUTH_STORAGE_KEY, JSON.stringify(session));
+  else localStorage.removeItem(AUTH_STORAGE_KEY);
+}
+
+async function sbLogin(email, password) {
+  const res = await fetch(`${SUPABASE_URL}/auth/v1/token?grant_type=password`, {
+    method: 'POST',
+    headers: { apikey: SUPABASE_ANON_KEY, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ email, password }),
+  });
+  const data = await res.json();
+  if (!res.ok) throw new Error(data.error_description || data.msg || 'Falha no login');
+  setSession(data);
+  return data;
+}
+
+async function sbRefreshSession() {
+  const session = getSession();
+  if (!session?.refresh_token) return null;
+  const res = await fetch(`${SUPABASE_URL}/auth/v1/token?grant_type=refresh_token`, {
+    method: 'POST',
+    headers: { apikey: SUPABASE_ANON_KEY, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ refresh_token: session.refresh_token }),
+  });
+  if (!res.ok) {
+    setSession(null);
+    return null;
+  }
+  const data = await res.json();
+  setSession(data);
+  return data;
+}
+
+function sbLogout() {
+  setSession(null);
+}
+
+function sbHeaders() {
+  const session = getSession();
+  return {
+    apikey: SUPABASE_ANON_KEY,
+    Authorization: `Bearer ${session?.access_token || SUPABASE_ANON_KEY}`,
+    'Content-Type': 'application/json',
+  };
+}
 
 async function sbSelectNotas() {
   const res = await fetch(
     `${SUPABASE_URL}/rest/v1/notas?select=id,titulo,conteudo,origem,tags,criado_em,atualizado_em&order=criado_em.asc`,
-    { headers: sbHeaders }
+    { headers: sbHeaders() }
   );
   if (!res.ok) {
     const t = await res.text().catch(() => '');
@@ -27,7 +80,7 @@ async function sbSelectNotas() {
 async function sbInsertNota(note) {
   const res = await fetch(`${SUPABASE_URL}/rest/v1/notas`, {
     method: 'POST',
-    headers: { ...sbHeaders, Prefer: 'return=minimal' },
+    headers: { ...sbHeaders(), Prefer: 'return=minimal' },
     body: JSON.stringify([
       { id: note.id, titulo: note.title, conteudo: note.content, origem: 'artifact' },
     ]),
@@ -41,7 +94,7 @@ async function sbInsertNota(note) {
 async function sbUpdateNota(note) {
   const res = await fetch(`${SUPABASE_URL}/rest/v1/notas?id=eq.${encodeURIComponent(note.id)}`, {
     method: 'PATCH',
-    headers: { ...sbHeaders, Prefer: 'return=minimal' },
+    headers: { ...sbHeaders(), Prefer: 'return=minimal' },
     body: JSON.stringify({
       titulo: note.title,
       conteudo: note.content,
@@ -57,7 +110,7 @@ async function sbUpdateNota(note) {
 async function sbDeleteNota(id) {
   const res = await fetch(`${SUPABASE_URL}/rest/v1/notas?id=eq.${encodeURIComponent(id)}`, {
     method: 'DELETE',
-    headers: { ...sbHeaders, Prefer: 'return=minimal' },
+    headers: { ...sbHeaders(), Prefer: 'return=minimal' },
   });
   if (!res.ok) {
     const t = await res.text().catch(() => '');
@@ -68,7 +121,7 @@ async function sbDeleteNota(id) {
 async function sbDeleteLinksFromOrigem(id) {
   const res = await fetch(`${SUPABASE_URL}/rest/v1/notas_links?nota_origem_id=eq.${encodeURIComponent(id)}`, {
     method: 'DELETE',
-    headers: { ...sbHeaders, Prefer: 'return=minimal' },
+    headers: { ...sbHeaders(), Prefer: 'return=minimal' },
   });
   if (!res.ok) {
     const t = await res.text().catch(() => '');
@@ -80,7 +133,7 @@ async function sbInsertLinks(rows) {
   if (!rows.length) return;
   const res = await fetch(`${SUPABASE_URL}/rest/v1/notas_links`, {
     method: 'POST',
-    headers: { ...sbHeaders, Prefer: 'return=minimal' },
+    headers: { ...sbHeaders(), Prefer: 'return=minimal' },
     body: JSON.stringify(rows),
   });
   if (!res.ok) {
@@ -93,7 +146,7 @@ async function sbBuscar(query) {
   const q = encodeURIComponent(query.trim());
   const res = await fetch(
     `${SUPABASE_URL}/rest/v1/notas?select=id,titulo,conteudo,origem,tags,criado_em&busca=wfts(portuguese).${q}&order=criado_em.desc&limit=25`,
-    { headers: sbHeaders }
+    { headers: sbHeaders() }
   );
   if (!res.ok) {
     const t = await res.text().catch(() => '');
@@ -102,11 +155,11 @@ async function sbBuscar(query) {
   return res.json();
 }
 
-async function sbPerguntar(pergunta) {
+async function sbPerguntar(pergunta, modelo) {
   const res = await fetch(`${SUPABASE_URL}/functions/v1/perguntar`, {
     method: 'POST',
-    headers: { ...sbHeaders },
-    body: JSON.stringify({ pergunta }),
+    headers: { ...sbHeaders() },
+    body: JSON.stringify({ pergunta, modelo }),
   });
   const data = await res.json().catch(() => ({}));
   if (!res.ok) {
@@ -456,7 +509,7 @@ function GraphView({ notes, selectedId, onSelect }) {
   );
 }
 
-export default function SegundoCerebro() {
+function SegundoCerebroApp({ onLogout }) {
   const [notes, setNotes] = useState([]);
   const [loaded, setLoaded] = useState(false);
   const [selectedId, setSelectedId] = useState(null);
@@ -467,10 +520,13 @@ export default function SegundoCerebro() {
   const [askAnswer, setAskAnswer] = useState('');
   const [askLoading, setAskLoading] = useState(false);
   const [askError, setAskError] = useState(null);
+  const [askModel, setAskModel] = useState('anthropic');
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [isMobile, setIsMobile] = useState(false);
   const [showPreview, setShowPreview] = useState(false);
   const titleRef = useRef(null);
+  const contentRef = useRef(null);
+  const [linkSuggest, setLinkSuggest] = useState(null);
 
   useEffect(() => {
     const check = () => {
@@ -536,7 +592,7 @@ export default function SegundoCerebro() {
     setAskError(null);
     setAskAnswer('');
     try {
-      const data = await sbPerguntar(query);
+      const data = await sbPerguntar(query, askModel);
       setAskAnswer(data.resposta || '');
       const usedTitles = (data.notas_usadas || []).map((t) => t.toLowerCase());
       const matched = notes.filter((n) => usedTitles.includes(n.title.toLowerCase()));
@@ -548,9 +604,109 @@ export default function SegundoCerebro() {
     } finally {
       setAskLoading(false);
     }
-  }, [notes]);
+  }, [notes, askModel]);
 
   const selected = notes.find((n) => n.id === selectedId);
+
+  // ---------- Autocomplete de [[links]] ----------
+  const findOpenLinkQuery = (text, caret) => {
+    const upto = text.slice(0, caret);
+    const openIdx = upto.lastIndexOf('[[');
+    if (openIdx === -1) return null;
+    const closedAfterOpen = upto.indexOf(']]', openIdx);
+    if (closedAfterOpen !== -1) return null;
+    const query = upto.slice(openIdx + 2);
+    if (query.includes('\n')) return null;
+    return { start: openIdx + 2, query };
+  };
+
+  const getCaretCoords = (el, position) => {
+    const div = document.createElement('div');
+    const style = getComputedStyle(el);
+    [
+      'boxSizing', 'width', 'paddingTop', 'paddingRight', 'paddingBottom', 'paddingLeft',
+      'borderTopWidth', 'borderRightWidth', 'borderBottomWidth', 'borderLeftWidth',
+      'fontStyle', 'fontVariant', 'fontWeight', 'fontStretch', 'fontSize', 'fontFamily',
+      'lineHeight', 'letterSpacing', 'wordSpacing', 'textIndent', 'textTransform',
+    ].forEach((p) => (div.style[p] = style[p]));
+    div.style.position = 'absolute';
+    div.style.visibility = 'hidden';
+    div.style.whiteSpace = 'pre-wrap';
+    div.style.wordWrap = 'break-word';
+    div.style.top = '0';
+    div.style.left = '-9999px';
+    div.style.height = 'auto';
+    div.style.overflow = 'hidden';
+    div.textContent = el.value.substring(0, position);
+    const span = document.createElement('span');
+    span.textContent = el.value.substring(position) || '.';
+    div.appendChild(span);
+    document.body.appendChild(div);
+    const coords = { left: span.offsetLeft, top: span.offsetTop };
+    document.body.removeChild(div);
+    return coords;
+  };
+
+  const syncLinkSuggestFromTextarea = (el, allNotes) => {
+    if (!el) return;
+    const caret = el.selectionStart;
+    const match = findOpenLinkQuery(el.value, caret);
+    if (!match) {
+      setLinkSuggest(null);
+      return;
+    }
+    const items = (allNotes || notes)
+      .filter((n) => n.id !== selectedId && n.title.toLowerCase().includes(match.query.toLowerCase()))
+      .slice(0, 6);
+    const coords = getCaretCoords(el, caret);
+    const rect = el.getBoundingClientRect();
+    const lineHeight = parseInt(getComputedStyle(el).lineHeight) || 19;
+    setLinkSuggest({
+      query: match.query,
+      start: match.start,
+      end: caret,
+      items,
+      activeIndex: 0,
+      top: rect.top + coords.top - el.scrollTop + lineHeight + 4,
+      left: Math.min(rect.left + coords.left, rect.right - 220),
+    });
+  };
+
+  const applyLinkSuggestion = (title) => {
+    if (!linkSuggest || !selected) return;
+    const el = contentRef.current;
+    const val = selected.content;
+    const before = val.slice(0, linkSuggest.start);
+    const afterCaret = val.slice(linkSuggest.end);
+    const newVal = `${before}${title}]]${afterCaret}`;
+    updateNoteContent(newVal);
+    setLinkSuggest(null);
+    requestAnimationFrame(() => {
+      if (el) {
+        const pos = before.length + title.length + 2;
+        el.focus();
+        el.setSelectionRange(pos, pos);
+      }
+    });
+  };
+
+  const handleContentKeyDown = (e) => {
+    if (!linkSuggest) return;
+    if (e.key === 'ArrowDown') {
+      e.preventDefault();
+      setLinkSuggest((s) => (s ? { ...s, activeIndex: Math.min(s.activeIndex + 1, Math.max(s.items.length - 1, 0)) } : s));
+    } else if (e.key === 'ArrowUp') {
+      e.preventDefault();
+      setLinkSuggest((s) => (s ? { ...s, activeIndex: Math.max(s.activeIndex - 1, 0) } : s));
+    } else if (e.key === 'Enter' || e.key === 'Tab') {
+      if (linkSuggest.items.length > 0) {
+        e.preventDefault();
+        applyLinkSuggestion(linkSuggest.items[linkSuggest.activeIndex].title);
+      }
+    } else if (e.key === 'Escape') {
+      setLinkSuggest(null);
+    }
+  };
 
   const updateNoteContent = (content) => {
     setNotes((prev) => {
@@ -598,7 +754,7 @@ export default function SegundoCerebro() {
       await sbDeleteLinksFromOrigem(id);
       await fetch(`${SUPABASE_URL}/rest/v1/notas_links?nota_destino_id=eq.${encodeURIComponent(id)}`, {
         method: 'DELETE',
-        headers: { ...sbHeaders, Prefer: 'return=minimal' },
+        headers: { ...sbHeaders(), Prefer: 'return=minimal' },
       });
       await sbDeleteNota(id);
       setSyncError(null);
@@ -758,6 +914,9 @@ export default function SegundoCerebro() {
               )}
             </div>
           )}
+          <button style={styles.logoutBtn} onClick={onLogout} title="Sair">
+            Sair
+          </button>
           {isMobile && view === 'editor' && selected && (
             <button style={styles.previewToggleBtn} onClick={() => setShowPreview((v) => !v)}>
               {showPreview ? 'Editar' : 'Ver'}
@@ -779,13 +938,52 @@ export default function SegundoCerebro() {
             <input ref={titleRef} value={selected.title} onChange={(e) => updateNoteTitle(e.target.value)} style={styles.titleInput} placeholder="Título da nota" />
             <div style={isMobile ? styles.editorSplitMobile : styles.editorSplit}>
               {(!isMobile || !showPreview) && (
-                <textarea
-                  value={selected.content}
-                  onChange={(e) => updateNoteContent(e.target.value)}
-                  style={styles.textarea}
-                  placeholder="Escreva aqui... use [[Nome]] para linkar notas e #tag para marcar"
-                  spellCheck={false}
-                />
+                <div style={{ position: 'relative', flex: 1, display: 'flex' }}>
+                  <textarea
+                    ref={contentRef}
+                    value={selected.content}
+                    onChange={(e) => {
+                      updateNoteContent(e.target.value);
+                      syncLinkSuggestFromTextarea(e.target);
+                    }}
+                    onClick={(e) => syncLinkSuggestFromTextarea(e.target)}
+                    onKeyUp={(e) => {
+                      if (!['ArrowDown', 'ArrowUp', 'Enter', 'Tab', 'Escape'].includes(e.key)) {
+                        syncLinkSuggestFromTextarea(e.target);
+                      }
+                    }}
+                    onKeyDown={handleContentKeyDown}
+                    onBlur={() => setTimeout(() => setLinkSuggest(null), 150)}
+                    style={styles.textarea}
+                    placeholder="Escreva aqui... use [[Nome]] para linkar notas e #tag para marcar"
+                    spellCheck={false}
+                  />
+                  {linkSuggest && (
+                    <div style={{ ...styles.linkSuggestBox, top: linkSuggest.top, left: linkSuggest.left }}>
+                      {linkSuggest.items.length > 0 ? (
+                        linkSuggest.items.map((n, i) => (
+                          <div
+                            key={n.id}
+                            onMouseDown={(e) => {
+                              e.preventDefault();
+                              applyLinkSuggestion(n.title);
+                            }}
+                            style={{
+                              ...styles.linkSuggestItem,
+                              ...(i === linkSuggest.activeIndex ? styles.linkSuggestItemActive : {}),
+                            }}
+                          >
+                            {n.title}
+                          </div>
+                        ))
+                      ) : (
+                        <div style={styles.linkSuggestEmpty}>
+                          {linkSuggest.query ? `Nenhuma nota com "${linkSuggest.query}"` : 'Digite pra buscar notas...'}
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
               )}
               {(!isMobile || showPreview) && (
               <div style={styles.preview} onClick={handleContentClick}>
@@ -834,6 +1032,24 @@ export default function SegundoCerebro() {
 
         {view === 'ask' && (
           <div style={styles.askWrap}>
+            <div style={styles.modelSelector}>
+              {[
+                { id: 'anthropic', label: 'Claude' },
+                { id: 'openai', label: 'ChatGPT' },
+                { id: 'gemini', label: 'Gemini' },
+              ].map((m) => (
+                <button
+                  key={m.id}
+                  onClick={() => setAskModel(m.id)}
+                  style={{
+                    ...styles.modelBtn,
+                    ...(askModel === m.id ? styles.modelBtnActive : {}),
+                  }}
+                >
+                  {m.label}
+                </button>
+              ))}
+            </div>
             <div style={styles.askBox}>
               <Search size={15} color="#7a8299" />
               <input
@@ -855,7 +1071,10 @@ export default function SegundoCerebro() {
 
             {askAnswer && (
               <div style={styles.askAnswerBox}>
-                <div style={styles.askAnswerLabel}>🧠 resposta</div>
+                <div style={styles.askAnswerLabel}>
+                  🧠 resposta ·{' '}
+                  {{ anthropic: 'Claude', openai: 'ChatGPT', gemini: 'Gemini' }[askModel] || askModel}
+                </div>
                 <div style={styles.askAnswerText}>{askAnswer}</div>
               </div>
             )}
@@ -965,6 +1184,31 @@ const styles = {
   editorSplit: { flex: 1, display: 'flex', gap: 18, minHeight: 0 },
   editorSplitMobile: { flex: 1, display: 'flex', flexDirection: 'column', gap: 12, minHeight: 0 },
   textarea: { flex: 1, background: '#12151c', border: '1px solid #1e232d', borderRadius: 10, padding: 16, color: '#d8d3c6', fontSize: 13.5, lineHeight: 1.6, resize: 'none', outline: 'none', fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace' },
+  linkSuggestBox: {
+    position: 'fixed',
+    zIndex: 50,
+    minWidth: 200,
+    maxWidth: 280,
+    maxHeight: 220,
+    overflowY: 'auto',
+    background: '#181c25',
+    border: '1px solid #2a3040',
+    borderRadius: 8,
+    boxShadow: '0 8px 24px rgba(0,0,0,0.45)',
+    padding: 4,
+  },
+  linkSuggestItem: {
+    padding: '7px 10px',
+    borderRadius: 5,
+    fontSize: 13,
+    color: '#d8d3c6',
+    cursor: 'pointer',
+    whiteSpace: 'nowrap',
+    overflow: 'hidden',
+    textOverflow: 'ellipsis',
+  },
+  linkSuggestItemActive: { background: '#2a3040', color: '#f4b877' },
+  linkSuggestEmpty: { padding: '8px 10px', fontSize: 12, color: '#5c6373' },
   preview: { flex: 1, background: '#0f1319', border: '1px solid #1e232d', borderRadius: 10, padding: '16px 20px', overflowY: 'auto', fontSize: 13.5, lineHeight: 1.7 },
   mdH1: { fontSize: 19, fontWeight: 700, margin: '4px 0 8px', color: '#f0ece2' },
   mdH2: { fontSize: 16.5, fontWeight: 700, margin: '10px 0 6px', color: '#f0ece2' },
@@ -1010,6 +1254,9 @@ const styles = {
     display: 'inline-block',
   },
   askWrap: { flex: 1, display: 'flex', flexDirection: 'column', padding: '20px 24px', overflowY: 'auto' },
+  modelSelector: { display: 'flex', gap: 6, marginBottom: 12, background: '#161a22', padding: 3, borderRadius: 8, width: 'fit-content' },
+  modelBtn: { padding: '6px 14px', background: 'transparent', border: 'none', borderRadius: 6, fontSize: 12, fontWeight: 600, color: '#8b91a0', cursor: 'pointer' },
+  modelBtnActive: { background: '#2a3040', color: '#e8a05c' },
   askBox: {
     display: 'flex',
     alignItems: 'center',
@@ -1055,4 +1302,145 @@ const styles = {
   askResultOrigem: { fontSize: 10.5, color: '#5c6373', marginTop: 6, textTransform: 'uppercase', letterSpacing: 0.4 },
   emptyMain: { flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 14 },
   emptyMainText: { fontSize: 13.5, color: '#5c6373' },
+
+  loginWrap: {
+    minHeight: '100vh',
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    background: '#0a0c11',
+    fontFamily: "'Inter', -apple-system, sans-serif",
+  },
+  loginCard: {
+    width: 340,
+    maxWidth: '90vw',
+    background: '#12151c',
+    border: '1px solid #1e232d',
+    borderRadius: 14,
+    padding: '32px 28px',
+  },
+  loginTitle: { fontSize: 19, fontWeight: 700, color: '#f0ece2', marginBottom: 4 },
+  loginSubtitle: { fontSize: 13, color: '#6b7180', marginBottom: 24 },
+  loginInput: {
+    width: '100%',
+    background: '#0d1016',
+    border: '1px solid #1e232d',
+    borderRadius: 8,
+    padding: '11px 13px',
+    fontSize: 14,
+    color: '#e8e2d6',
+    marginBottom: 12,
+    outline: 'none',
+    boxSizing: 'border-box',
+  },
+  loginBtn: {
+    width: '100%',
+    background: '#e8a05c',
+    color: '#12151c',
+    border: 'none',
+    borderRadius: 8,
+    padding: '11px 13px',
+    fontSize: 14,
+    fontWeight: 700,
+    cursor: 'pointer',
+    marginTop: 4,
+  },
+  loginError: { fontSize: 12.5, color: '#e07a5f', marginBottom: 12 },
+  logoutBtn: {
+    background: 'transparent',
+    border: '1px solid #262b38',
+    borderRadius: 7,
+    padding: '6px 12px',
+    fontSize: 11.5,
+    color: '#6b7180',
+    cursor: 'pointer',
+    marginLeft: 8,
+  },
 };
+
+function LoginScreen({ onLoggedIn }) {
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+  const [error, setError] = useState(null);
+  const [loading, setLoading] = useState(false);
+
+  const submit = async (e) => {
+    e.preventDefault();
+    setError(null);
+    setLoading(true);
+    try {
+      await sbLogin(email.trim(), password);
+      onLoggedIn();
+    } catch (err) {
+      setError(err.message || 'Não foi possível entrar');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <div style={styles.loginWrap}>
+      <form style={styles.loginCard} onSubmit={submit}>
+        <div style={styles.loginTitle}>🧠 Segundo Cérebro</div>
+        <div style={styles.loginSubtitle}>Entre para acessar suas notas</div>
+        {error && <div style={styles.loginError}>{error}</div>}
+        <input
+          style={styles.loginInput}
+          type="email"
+          placeholder="E-mail"
+          value={email}
+          onChange={(e) => setEmail(e.target.value)}
+          autoFocus
+        />
+        <input
+          style={styles.loginInput}
+          type="password"
+          placeholder="Senha"
+          value={password}
+          onChange={(e) => setPassword(e.target.value)}
+        />
+        <button style={styles.loginBtn} type="submit" disabled={loading}>
+          {loading ? 'Entrando...' : 'Entrar'}
+        </button>
+      </form>
+    </div>
+  );
+}
+
+export default function SegundoCerebro() {
+  const [checking, setChecking] = useState(true);
+  const [authed, setAuthed] = useState(false);
+
+  useEffect(() => {
+    (async () => {
+      const session = getSession();
+      if (!session) {
+        setChecking(false);
+        return;
+      }
+      const expiresAt = session.expires_at ? session.expires_at * 1000 : 0;
+      if (Date.now() >= expiresAt - 30000) {
+        const refreshed = await sbRefreshSession();
+        setAuthed(!!refreshed);
+      } else {
+        setAuthed(true);
+      }
+      setChecking(false);
+    })();
+  }, []);
+
+  const handleLogout = useCallback(() => {
+    sbLogout();
+    setAuthed(false);
+  }, []);
+
+  if (checking) {
+    return <div style={styles.loginWrap}></div>;
+  }
+
+  if (!authed) {
+    return <LoginScreen onLoggedIn={() => setAuthed(true)} />;
+  }
+
+  return <SegundoCerebroApp onLogout={handleLogout} />;
+}
