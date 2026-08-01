@@ -469,6 +469,8 @@ function SegundoCerebroApp({ onLogout }) {
   const [isMobile, setIsMobile] = useState(false);
   const [showPreview, setShowPreview] = useState(false);
   const titleRef = useRef(null);
+  const contentRef = useRef(null);
+  const [linkSuggest, setLinkSuggest] = useState(null);
 
   useEffect(() => {
     const check = () => {
@@ -549,6 +551,106 @@ function SegundoCerebroApp({ onLogout }) {
   }, [notes, askModel]);
 
   const selected = notes.find((n) => n.id === selectedId);
+
+  // ---------- Autocomplete de [[links]] ----------
+  const findOpenLinkQuery = (text, caret) => {
+    const upto = text.slice(0, caret);
+    const openIdx = upto.lastIndexOf('[[');
+    if (openIdx === -1) return null;
+    const closedAfterOpen = upto.indexOf(']]', openIdx);
+    if (closedAfterOpen !== -1) return null;
+    const query = upto.slice(openIdx + 2);
+    if (query.includes('\n')) return null;
+    return { start: openIdx + 2, query };
+  };
+
+  const getCaretCoords = (el, position) => {
+    const div = document.createElement('div');
+    const style = getComputedStyle(el);
+    [
+      'boxSizing', 'width', 'paddingTop', 'paddingRight', 'paddingBottom', 'paddingLeft',
+      'borderTopWidth', 'borderRightWidth', 'borderBottomWidth', 'borderLeftWidth',
+      'fontStyle', 'fontVariant', 'fontWeight', 'fontStretch', 'fontSize', 'fontFamily',
+      'lineHeight', 'letterSpacing', 'wordSpacing', 'textIndent', 'textTransform',
+    ].forEach((p) => (div.style[p] = style[p]));
+    div.style.position = 'absolute';
+    div.style.visibility = 'hidden';
+    div.style.whiteSpace = 'pre-wrap';
+    div.style.wordWrap = 'break-word';
+    div.style.top = '0';
+    div.style.left = '-9999px';
+    div.style.height = 'auto';
+    div.style.overflow = 'hidden';
+    div.textContent = el.value.substring(0, position);
+    const span = document.createElement('span');
+    span.textContent = el.value.substring(position) || '.';
+    div.appendChild(span);
+    document.body.appendChild(div);
+    const coords = { left: span.offsetLeft, top: span.offsetTop };
+    document.body.removeChild(div);
+    return coords;
+  };
+
+  const syncLinkSuggestFromTextarea = (el, allNotes) => {
+    if (!el) return;
+    const caret = el.selectionStart;
+    const match = findOpenLinkQuery(el.value, caret);
+    if (!match) {
+      setLinkSuggest(null);
+      return;
+    }
+    const items = (allNotes || notes)
+      .filter((n) => n.id !== selectedId && n.title.toLowerCase().includes(match.query.toLowerCase()))
+      .slice(0, 6);
+    const coords = getCaretCoords(el, caret);
+    const rect = el.getBoundingClientRect();
+    const lineHeight = parseInt(getComputedStyle(el).lineHeight) || 19;
+    setLinkSuggest({
+      query: match.query,
+      start: match.start,
+      end: caret,
+      items,
+      activeIndex: 0,
+      top: rect.top + coords.top - el.scrollTop + lineHeight + 4,
+      left: Math.min(rect.left + coords.left, rect.right - 220),
+    });
+  };
+
+  const applyLinkSuggestion = (title) => {
+    if (!linkSuggest || !selected) return;
+    const el = contentRef.current;
+    const val = selected.content;
+    const before = val.slice(0, linkSuggest.start);
+    const afterCaret = val.slice(linkSuggest.end);
+    const newVal = `${before}${title}]]${afterCaret}`;
+    updateNoteContent(newVal);
+    setLinkSuggest(null);
+    requestAnimationFrame(() => {
+      if (el) {
+        const pos = before.length + title.length + 2;
+        el.focus();
+        el.setSelectionRange(pos, pos);
+      }
+    });
+  };
+
+  const handleContentKeyDown = (e) => {
+    if (!linkSuggest) return;
+    if (e.key === 'ArrowDown') {
+      e.preventDefault();
+      setLinkSuggest((s) => (s ? { ...s, activeIndex: Math.min(s.activeIndex + 1, Math.max(s.items.length - 1, 0)) } : s));
+    } else if (e.key === 'ArrowUp') {
+      e.preventDefault();
+      setLinkSuggest((s) => (s ? { ...s, activeIndex: Math.max(s.activeIndex - 1, 0) } : s));
+    } else if (e.key === 'Enter' || e.key === 'Tab') {
+      if (linkSuggest.items.length > 0) {
+        e.preventDefault();
+        applyLinkSuggestion(linkSuggest.items[linkSuggest.activeIndex].title);
+      }
+    } else if (e.key === 'Escape') {
+      setLinkSuggest(null);
+    }
+  };
 
   const updateNoteContent = (content) => {
     setNotes((prev) => {
@@ -780,13 +882,52 @@ function SegundoCerebroApp({ onLogout }) {
             <input ref={titleRef} value={selected.title} onChange={(e) => updateNoteTitle(e.target.value)} style={styles.titleInput} placeholder="Título da nota" />
             <div style={isMobile ? styles.editorSplitMobile : styles.editorSplit}>
               {(!isMobile || !showPreview) && (
-                <textarea
-                  value={selected.content}
-                  onChange={(e) => updateNoteContent(e.target.value)}
-                  style={styles.textarea}
-                  placeholder="Escreva aqui... use [[Nome]] para linkar notas e #tag para marcar"
-                  spellCheck={false}
-                />
+                <div style={{ position: 'relative', flex: 1, display: 'flex' }}>
+                  <textarea
+                    ref={contentRef}
+                    value={selected.content}
+                    onChange={(e) => {
+                      updateNoteContent(e.target.value);
+                      syncLinkSuggestFromTextarea(e.target);
+                    }}
+                    onClick={(e) => syncLinkSuggestFromTextarea(e.target)}
+                    onKeyUp={(e) => {
+                      if (!['ArrowDown', 'ArrowUp', 'Enter', 'Tab', 'Escape'].includes(e.key)) {
+                        syncLinkSuggestFromTextarea(e.target);
+                      }
+                    }}
+                    onKeyDown={handleContentKeyDown}
+                    onBlur={() => setTimeout(() => setLinkSuggest(null), 150)}
+                    style={styles.textarea}
+                    placeholder="Escreva aqui... use [[Nome]] para linkar notas e #tag para marcar"
+                    spellCheck={false}
+                  />
+                  {linkSuggest && (
+                    <div style={{ ...styles.linkSuggestBox, top: linkSuggest.top, left: linkSuggest.left }}>
+                      {linkSuggest.items.length > 0 ? (
+                        linkSuggest.items.map((n, i) => (
+                          <div
+                            key={n.id}
+                            onMouseDown={(e) => {
+                              e.preventDefault();
+                              applyLinkSuggestion(n.title);
+                            }}
+                            style={{
+                              ...styles.linkSuggestItem,
+                              ...(i === linkSuggest.activeIndex ? styles.linkSuggestItemActive : {}),
+                            }}
+                          >
+                            {n.title}
+                          </div>
+                        ))
+                      ) : (
+                        <div style={styles.linkSuggestEmpty}>
+                          {linkSuggest.query ? `Nenhuma nota com "${linkSuggest.query}"` : 'Digite pra buscar notas...'}
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
               )}
               {(!isMobile || showPreview) && (
               <div style={styles.preview} onClick={handleContentClick}>
@@ -973,6 +1114,31 @@ const styles = {
   editorSplit: { flex: 1, display: 'flex', gap: 18, minHeight: 0 },
   editorSplitMobile: { flex: 1, display: 'flex', flexDirection: 'column', gap: 12, minHeight: 0 },
   textarea: { flex: 1, background: '#12151c', border: '1px solid #1e232d', borderRadius: 10, padding: 16, color: '#d8d3c6', fontSize: 13.5, lineHeight: 1.6, resize: 'none', outline: 'none', fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace' },
+  linkSuggestBox: {
+    position: 'fixed',
+    zIndex: 50,
+    minWidth: 200,
+    maxWidth: 280,
+    maxHeight: 220,
+    overflowY: 'auto',
+    background: '#181c25',
+    border: '1px solid #2a3040',
+    borderRadius: 8,
+    boxShadow: '0 8px 24px rgba(0,0,0,0.45)',
+    padding: 4,
+  },
+  linkSuggestItem: {
+    padding: '7px 10px',
+    borderRadius: 5,
+    fontSize: 13,
+    color: '#d8d3c6',
+    cursor: 'pointer',
+    whiteSpace: 'nowrap',
+    overflow: 'hidden',
+    textOverflow: 'ellipsis',
+  },
+  linkSuggestItemActive: { background: '#2a3040', color: '#f4b877' },
+  linkSuggestEmpty: { padding: '8px 10px', fontSize: 12, color: '#5c6373' },
   preview: { flex: 1, background: '#0f1319', border: '1px solid #1e232d', borderRadius: 10, padding: '16px 20px', overflowY: 'auto', fontSize: 13.5, lineHeight: 1.7 },
   mdH1: { fontSize: 19, fontWeight: 700, margin: '4px 0 8px', color: '#f0ece2' },
   mdH2: { fontSize: 16.5, fontWeight: 700, margin: '10px 0 6px', color: '#f0ece2' },
