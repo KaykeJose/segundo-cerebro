@@ -77,6 +77,18 @@ async function sbSelectNotas() {
   return res.json();
 }
 
+async function sbSelectAllLinks() {
+  const res = await fetch(
+    `${SUPABASE_URL}/rest/v1/notas_links?select=nota_origem_id,nota_destino_id`,
+    { headers: sbHeaders() }
+  );
+  if (!res.ok) {
+    const t = await res.text().catch(() => '');
+    throw new Error(`Supabase ${res.status}: ${t}`);
+  }
+  return res.json();
+}
+
 async function sbInsertNota(note) {
   const res = await fetch(`${SUPABASE_URL}/rest/v1/notas`, {
     method: 'POST',
@@ -269,7 +281,7 @@ const SEED_NOTES = [
 ];
 
 // ---------- D3 Graph Component ----------
-function GraphView({ notes, selectedId, onSelect }) {
+function GraphView({ notes, selectedId, onSelect, dbLinks = [] }) {
   const svgRef = useRef(null);
   const containerRef = useRef(null);
   const simRef = useRef(null);
@@ -288,13 +300,29 @@ function GraphView({ notes, selectedId, onSelect }) {
       tag: (n.tags && n.tags[0]) || null,
     }));
     const links = [];
+    const seenPairs = new Set();
+    const addLink = (sourceId, targetId) => {
+      if (!sourceId || !targetId || sourceId === targetId) return;
+      const key = [sourceId, targetId].sort().join('::');
+      if (seenPairs.has(key)) return;
+      seenPairs.add(key);
+      links.push({ source: sourceId, target: targetId });
+    };
+
+    // ligações escritas como [[texto]] dentro da nota
     notes.forEach((n) => {
       extractLinks(n.content).forEach((linkTitle) => {
         const targetId = titleToId[linkTitle.toLowerCase()];
-        if (targetId && targetId !== n.id) {
-          links.push({ source: n.id, target: targetId });
-        }
+        addLink(n.id, targetId);
       });
+    });
+
+    // ligações gravadas direto no banco (ex: pela revisão semanal automática)
+    const noteIds = new Set(notes.map((n) => n.id));
+    dbLinks.forEach((l) => {
+      if (noteIds.has(l.nota_origem_id) && noteIds.has(l.nota_destino_id)) {
+        addLink(l.nota_origem_id, l.nota_destino_id);
+      }
     });
 
     const svg = d3.select(svgRef.current);
@@ -501,7 +529,7 @@ function GraphView({ notes, selectedId, onSelect }) {
       sim.stop();
       clearTimeout(fitTimer);
     };
-  }, [notes, selectedId]);
+  }, [notes, selectedId, dbLinks]);
 
   return (
     <div ref={containerRef} style={{ width: '100%', height: '100%' }}>
@@ -529,6 +557,7 @@ function SegundoCerebroApp({ onLogout }) {
   const contentRef = useRef(null);
   const [linkSuggest, setLinkSuggest] = useState(null);
   const [showArchived, setShowArchived] = useState(false);
+  const [dbLinks, setDbLinks] = useState([]);
 
   useEffect(() => {
     const check = () => {
@@ -550,6 +579,12 @@ function SegundoCerebroApp({ onLogout }) {
         const loadedNotes = (rows || []).map(rowToNote);
         setNotes(loadedNotes);
         setSelectedId(loadedNotes[0]?.id || null);
+        try {
+          const linkRows = await sbSelectAllLinks();
+          setDbLinks(linkRows || []);
+        } catch (e) {
+          console.error('Erro ao carregar links do Supabase', e);
+        }
         setLoaded(true);
       } catch (e) {
         console.error('Erro ao carregar do Supabase', e);
@@ -1050,7 +1085,7 @@ function SegundoCerebroApp({ onLogout }) {
                 ))}
               </div>
             </div>
-            <GraphView notes={graphNotes} selectedId={selectedId} onSelect={(id) => setSelectedId(id)} />
+            <GraphView notes={graphNotes} selectedId={selectedId} onSelect={(id) => setSelectedId(id)} dbLinks={dbLinks} />
           </div>
         )}
 
