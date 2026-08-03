@@ -67,7 +67,7 @@ function sbHeaders() {
 
 async function sbSelectNotas() {
   const res = await fetch(
-    `${SUPABASE_URL}/rest/v1/notas?select=id,titulo,conteudo,origem,tags,criado_em,atualizado_em&order=criado_em.asc`,
+    `${SUPABASE_URL}/rest/v1/notas?select=id,titulo,conteudo,origem,tags,criado_em,atualizado_em,arquivada&order=criado_em.asc`,
     { headers: sbHeaders() }
   );
   if (!res.ok) {
@@ -175,6 +175,7 @@ function rowToNote(row) {
     content: row.conteudo || '',
     origem: row.origem || null,
     tags: row.tags || [],
+    arquivada: !!row.arquivada,
     createdAt: row.criado_em ? new Date(row.criado_em).getTime() : Date.now(),
     updatedAt: row.atualizado_em ? new Date(row.atualizado_em).getTime() : Date.now(),
   };
@@ -527,6 +528,7 @@ function SegundoCerebroApp({ onLogout }) {
   const titleRef = useRef(null);
   const contentRef = useRef(null);
   const [linkSuggest, setLinkSuggest] = useState(null);
+  const [showArchived, setShowArchived] = useState(false);
 
   useEffect(() => {
     const check = () => {
@@ -784,10 +786,18 @@ function SegundoCerebroApp({ onLogout }) {
   }, [notes]);
 
   const filteredNotes = useMemo(() => {
-    if (!search.trim()) return notes;
+    const base = showArchived ? notes : notes.filter((n) => !n.arquivada);
+    if (!search.trim()) return base;
     const q = search.toLowerCase();
-    return notes.filter((n) => n.title.toLowerCase().includes(q) || n.content.toLowerCase().includes(q));
-  }, [notes, search]);
+    return base.filter((n) => n.title.toLowerCase().includes(q) || n.content.toLowerCase().includes(q));
+  }, [notes, search, showArchived]);
+
+  const archivedCount = useMemo(() => notes.filter((n) => n.arquivada).length, [notes]);
+
+  const graphNotes = useMemo(
+    () => (showArchived ? notes : notes.filter((n) => !n.arquivada)),
+    [notes, showArchived]
+  );
 
   const edgeCount = useMemo(() => {
     const titleToId = {};
@@ -844,6 +854,15 @@ function SegundoCerebroApp({ onLogout }) {
             <Plus size={15} /> Nova nota
           </button>
 
+          {archivedCount > 0 && (
+            <button
+              style={{ ...styles.archiveToggle, ...(showArchived ? styles.archiveToggleActive : {}) }}
+              onClick={() => setShowArchived((v) => !v)}
+            >
+              {showArchived ? '📂 Ocultar arquivadas' : `🗄️ Ver arquivadas (${archivedCount})`}
+            </button>
+          )}
+
           <div style={styles.notesList}>
             {filteredNotes.map((n) => (
               <div
@@ -852,10 +871,15 @@ function SegundoCerebroApp({ onLogout }) {
                   setSelectedId(n.id);
                   setView('editor');
                 }}
-                style={{ ...styles.noteItem, ...(n.id === selectedId ? styles.noteItemActive : {}) }}
+                style={{
+                  ...styles.noteItem,
+                  ...(n.id === selectedId ? styles.noteItemActive : {}),
+                  ...(n.arquivada ? styles.noteItemArchived : {}),
+                }}
               >
                 <FileText size={13} color={n.id === selectedId ? '#e8a05c' : '#7a8299'} />
                 <span style={styles.noteItemTitle}>{n.title || 'Sem título'}</span>
+                {n.arquivada && <span style={styles.archivedBadge}>arquivada</span>}
                 <Trash2
                   size={13}
                   color="#5c6373"
@@ -1026,7 +1050,7 @@ function SegundoCerebroApp({ onLogout }) {
                 ))}
               </div>
             </div>
-            <GraphView notes={notes} selectedId={selectedId} onSelect={(id) => setSelectedId(id)} />
+            <GraphView notes={graphNotes} selectedId={selectedId} onSelect={(id) => setSelectedId(id)} />
           </div>
         )}
 
@@ -1164,6 +1188,10 @@ const styles = {
   searchBox: { display: 'flex', alignItems: 'center', gap: 8, margin: '0 12px 10px', padding: '7px 10px', background: '#1a1f29', border: '1px solid #262c38', borderRadius: 8 },
   searchInput: { background: 'transparent', border: 'none', outline: 'none', color: '#e8e2d6', fontSize: 12.5, width: '100%' },
   newNoteBtn: { display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6, margin: '0 12px 12px', padding: '8px 10px', background: '#e8a05c', color: '#1a1410', border: 'none', borderRadius: 8, fontSize: 12.5, fontWeight: 600, cursor: 'pointer' },
+  archiveToggle: { margin: '0 12px 12px', padding: '7px 10px', background: 'transparent', border: '1px solid #262b38', borderRadius: 7, fontSize: 11.5, color: '#7a8299', cursor: 'pointer', textAlign: 'center' },
+  archiveToggleActive: { background: '#1f2430', color: '#e8a05c', borderColor: '#3a3020' },
+  noteItemArchived: { opacity: 0.55 },
+  archivedBadge: { fontSize: 9.5, color: '#8b7355', background: '#241f16', border: '1px solid #3a3020', borderRadius: 4, padding: '1px 5px', marginLeft: 6, flexShrink: 0, textTransform: 'uppercase', letterSpacing: 0.3 },
   notesList: { flex: 1, overflowY: 'auto', padding: '0 8px' },
   noteItem: { display: 'flex', alignItems: 'center', gap: 8, padding: '8px 10px', borderRadius: 7, cursor: 'pointer', fontSize: 12.5, color: '#b7bcc9', marginBottom: 2 },
   noteItemActive: { background: '#1f2430', color: '#f0ece2' },
